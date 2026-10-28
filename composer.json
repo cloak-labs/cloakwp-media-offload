@@ -1,0 +1,16 @@
+{
+  "name": "cloakwp/media-offload",
+  "description": "Store WordPress attachments in S3-compatible object storage.",
+  "homepage": "https://github.com/cloak-labs/cloakwp-media-offload",
+  "license": "LGPL-3.0-or-later",
+  "type": "wordpress-muplugin",
+  "require": {"php": ">=8.2", "composer/installers": "^1.0 || ^2.2", "aws/aws-sdk-php": "^3.402.2"},
+  "require-dev": {"phpunit/phpunit": "^11.0"},
+  "autoload": {"psr-4": {"CloakWP\\MediaOffload\\": "src/"}},
+  "autoload-dev": {"psr-4": {"CloakWP\\MediaOffload\\Tests\\": "tests/"}},
+  "scripts": {"test": "phpunit", "test:http": "node tests/s3-http.mjs"},
+  "config": {"allow-plugins": {"composer/installers": true}, "sort-packages": true,
+    "platform": {
+      "php": "8.2.0"
+    }}
+}
