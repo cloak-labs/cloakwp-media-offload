@@ -57,6 +57,7 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -o "$RUNNER_TEMP/wp"
           chmod +x "$RUNNER_TEMP/wp"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          mkdir -p "$RUNNER_TEMP/site/public/wordpress"
           "$RUNNER_TEMP/wp" core download --path="$RUNNER_TEMP/site/public/wordpress" --version="${{ matrix.wordpress }}" --allow-root
           "$RUNNER_TEMP/wp" config create --path="$RUNNER_TEMP/site/public/wordpress" --dbname=wordpress --dbuser=root --dbpass=wordpress --dbhost=127.0.0.1 --allow-root
           "$RUNNER_TEMP/wp" config set WP_ENV development --path="$RUNNER_TEMP/site/public/wordpress" --allow-root
