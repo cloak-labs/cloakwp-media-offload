@@ -30,7 +30,8 @@ try {
     if ((fileperms($path) & 0777) !== 0600) { throw new RuntimeException('Private restore permissions are unsafe.'); }
     $scopedConfig = new Config(new LocalStorage($temp . '/public'), 'https://media.example.test', 'private-test', true, false, new LocalStorage($temp . '/objects'), $temp . '/private', [get_current_blog_id()]);
     $scoped = new Offloader($scopedConfig);
-    $otherSites = get_sites(['fields' => 'ids', 'number' => 1, 'exclude' => [get_current_blog_id()]]);
+    $otherSites = get_sites(['fields' => 'ids', 'number' => 1, 'site__not_in' => [get_current_blog_id()]]);
+    if (getenv('CI') && !$otherSites) { throw new RuntimeException('CI requires a second site for the allowlist check.'); }
     if ($otherSites) {
         switch_to_blog((int) $otherSites[0]);
         try {
