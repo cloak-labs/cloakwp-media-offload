@@ -72,7 +72,7 @@ final class Integration
     public function url(string $url, int $id): string
     {
         $state = $this->offloader->state($id);
-        if (!$state) { return $url; }
+        if (!$state) { return $this->offloader->isPrivate($id) ? '' : $url; }
         if (!$this->current($state, $id)) {
             return !empty($state['private']) || $this->offloader->isPrivate($id) ? '' : $url;
         }
@@ -89,10 +89,12 @@ final class Integration
     public function originalUrl(string $url, int $id): string
     {
         $state = $this->offloader->state($id);
-        if (!$state || empty($state['private']) || !$this->current($state, $id)) { return $url; }
+        if (!$state || empty($state['private']) || !$this->current($state, $id)) {
+            return (!empty($state['private']) || $this->offloader->isPrivate($id)) ? '' : $url;
+        }
         $meta = wp_get_attachment_metadata($id, true);
         $name = is_array($meta) && !empty($meta['original_image']) ? basename((string) $meta['original_image']) : $state['main'];
-        return isset($state['files'][$name]) ? $this->privateUrl($id, $name) : $url;
+        return isset($state['files'][$name]) ? $this->privateUrl($id, $name) : '';
     }
     public function privateImage(mixed $result, int $id, mixed $size): mixed
     {
@@ -158,6 +160,7 @@ final class Integration
     public function srcset(array $sources, array $size, string $src, array $meta, int $id): array
     {
         $state = $this->offloader->state($id);
+        if (!empty($state['private']) || $this->offloader->isPrivate($id)) { return []; }
         if (!$state || !empty($state['private']) || !$this->current($state, $id)) { return $sources; }
         foreach ($sources as &$source) {
             $name = rawurldecode(basename((string) parse_url($source['url'], PHP_URL_PATH)));

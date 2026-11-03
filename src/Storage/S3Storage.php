@@ -20,7 +20,9 @@ final class S3Storage implements Storage
             // Content-addressed revision keys prevent legitimate overwrites.
             $this->client->putObject(['Bucket' => $this->bucket, 'Key' => $key, 'Body' => $stream,
                 'ContentType' => $mime, 'CacheControl' => $this->private ? 'private, no-store' : 'public, max-age=31536000, immutable',
-                'IfNoneMatch' => '*', 'ContentMD5' => base64_encode(md5_file($path, true)), 'Metadata' => ['sha256' => hash_file('sha256', $path)]]);
+                'IfNoneMatch' => '*', 'ContentMD5' => base64_encode(md5_file($path, true)), 'Metadata' => ['sha256' => hash_file('sha256', $path)],
+                // Do not let recent SDK versions add a second checksum to Content-MD5.
+                '@context' => ['request_checksum_calculation' => 'when_required']]);
         } catch (S3Exception $e) {
             if ($e->getStatusCode() !== 412) { throw $e; }
             // Existing objects are checked by the service before publishing.

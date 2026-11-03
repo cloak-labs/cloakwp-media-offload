@@ -32,6 +32,12 @@ try {
     wp_update_attachment_metadata($id, wp_generate_attachment_metadata($id, $upload['file']));
     check_offload((bool) wp_next_scheduled('cloakwp_media_offload_attachment', [$id, 0]), 'Automatic upload job was not scheduled');
     $localUrl = wp_get_attachment_url($id);
+    update_post_meta($id, '_media_offload_test_private', 1);
+    check_offload(wp_get_attachment_url($id) === false, 'A private attachment without an offload manifest exposed its local URL');
+    check_offload($offloader->isPrivate($id), 'Private classification was not applied');
+    check_offload((new Integration($offloader, $config))->originalUrl('https://local.test/original.png', $id) === '', 'A private original exposed its local URL');
+    check_offload((new Integration($offloader, $config))->srcset([['url' => $localUrl]], [], '', [], $id) === [], 'A private srcset exposed a local URL');
+    delete_post_meta($id, '_media_offload_test_private');
     $storage->bad = true;
     try { $offloader->offload($id); throw new RuntimeException('Verification failure was accepted'); } catch (RuntimeException $e) { if ($e->getMessage() === 'Verification failure was accepted') throw $e; }
     check_offload($offloader->state($id) === null, 'Failed upload published state');

@@ -21,6 +21,7 @@ final class S3StorageTest extends TestCase
             $write = $mock->getLastCommand();
             self::assertSame('*', $write['IfNoneMatch']);
             self::assertSame(base64_encode(md5('abc', true)), $write['ContentMD5']);
+            self::assertSame('when_required', $write['@context']['request_checksum_calculation']);
             self::assertSame(hash('sha256', 'abc'), $write['Metadata']['sha256']);
             self::assertSame(['size' => 3, 'sha256' => hash('sha256', 'abc')], $storage->inspect('test/file.png'));
             $commands = $mock->getLastCommand();

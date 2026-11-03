@@ -194,13 +194,15 @@ The plugin treats attachment posts with the WordPress `private` status as privat
 
 WordPress and other plugins can store sensitive uploads as regular attachments. Their post status alone does not make their files private. Add a site-specific privacy filter for those files before you enable offload.
 
+Private storage is not a complete private upload system. Before you use it for sensitive files, make sure the upload path is protected before WordPress receives a file. Also protect image edits, restores, temporary files, and old copies. Test direct requests to each path without a login. A private URL from this plugin does not block direct requests to a local file.
+
 To add an R2 private bucket, create a second bucket without public access. Use separate credentials with access to the private bucket. Add a private adapter before `register()`:
 
 ```php
 ->privateStorage(new S3Storage($privateClient, getenv('R2_PRIVATE_BUCKET'), true))
 ```
 
-The constructor rejects the same S3 bucket for public and private storage. It cannot check the bucket access policy. The private endpoint checks the user's WordPress login and edit capability. It sends private, no-store cache headers. It sends non-image documents as downloads.
+The constructor rejects the same S3 bucket for public and private storage. It cannot check the bucket access policy or public domains. The private endpoint checks the user's WordPress login and edit capability. It sends private, no-store cache headers. It sends non-image documents as downloads. Before an attachment has a valid private manifest, the plugin does not return its local attachment URL or original image URL. This does not protect the local file from a direct request.
 
 **Warning:** Protect sensitive local files before you use private storage. WordPress can write uploads into a web-accessible directory. The plugin also restores files there for editing. A private bucket does not protect a public local file. An old public object or cached URL can remain accessible after a privacy change.
 
