@@ -11,6 +11,7 @@ final class Integration
     public function __construct(private readonly Offloader $offloader, private readonly Config $config) {}
     public function register(): void
     {
+        add_filter('cloakwp/media-offload/offloader', [$this, 'offloader']);
         add_filter('wp_get_attachment_url', [$this, 'url'], 10, 2);
         add_filter('pre_attachment_url_to_postid', [$this, 'attachmentId'], 10, 2);
         add_filter('wp_calculate_image_srcset', [$this, 'srcset'], 10, 5);
@@ -28,9 +29,11 @@ final class Integration
         }
         if (is_admin()) { (new Screen($this->offloader, $this))->register(); }
     }
+    public function offloader(mixed $existing): mixed { return $existing ?? $this->offloader; }
     public function metadata(mixed $metadata, int $id): mixed { $this->schedule($id); return $metadata; }
     public function schedule(int $id): bool
     {
+        if (!$this->offloader->siteAllowed()) { return false; }
         if (wp_next_scheduled(self::JOB, [$id, 0])) { return true; }
         return wp_schedule_single_event(time() + 60, self::JOB, [$id, 0]) === true;
     }
@@ -119,8 +122,8 @@ final class Integration
             || $name === '' || basename($name) !== $name || !isset($state['files'][$name])) {
             wp_die('File not found.', '', ['response' => 404]);
         }
-        $temp = tempnam(sys_get_temp_dir(), 'cloakwp-private-');
-        if ($temp === false) { wp_die('File unavailable.', '', ['response' => 503]); }
+        try { $temp = $this->offloader->temporaryFile(true); }
+        catch (\Throwable $e) { wp_die('File unavailable.', '', ['response' => 503]); }
         try {
             $this->offloader->download($id, $name, $temp);
             $type = wp_check_filetype($name);

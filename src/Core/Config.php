@@ -13,6 +13,8 @@ final class Config
         public readonly bool $automatic = true,
         public readonly bool $removeLocal = false,
         public readonly ?Storage $privateStorage = null,
+        public readonly ?string $privateDirectory = null,
+        public readonly ?array $siteIds = null,
     ) {
         $parts = parse_url($publicUrl);
         if (!filter_var($publicUrl, FILTER_VALIDATE_URL) || !is_array($parts) || ($parts['scheme'] ?? '') !== 'https'
@@ -28,6 +30,9 @@ final class Config
         if ($privateStorage instanceof S3Storage && (!$privateStorage->isPrivate()
             || ($storage instanceof S3Storage && $storage->identity() === $privateStorage->identity()))) {
             throw new \InvalidArgumentException('Private S3 storage must use private mode and a separate bucket.');
+        }
+        if ($siteIds !== null && (!$siteIds || array_filter($siteIds, static fn($id) => !is_int($id) || $id < 1))) {
+            throw new \InvalidArgumentException('Site IDs must be a non-empty list of positive integers.');
         }
     }
 }

@@ -51,6 +51,38 @@ final class Command
         \WP_CLI::log(wp_json_encode(['id' => $id, 'offloaded' => $state !== null, 'objects' => $state ? count($state['files']) : 0, 'error' => $error ?: null], JSON_PRETTY_PRINT));
     }
 
+    /**
+     * Report attachment counts, stored failures, and queued work for this site.
+     *
+     * ## OPTIONS
+     * [--fail-on-errors] : Exit with an error when attachments have stored failures.
+     */
+    public function report(array $args, array $assoc): void
+    {
+        global $wpdb;
+        $count = static function (string $key) use ($wpdb): int {
+            return (int) $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(DISTINCT p.ID) FROM {$wpdb->posts} p INNER JOIN {$wpdb->postmeta} m ON m.post_id = p.ID WHERE p.post_type = 'attachment' AND p.post_status <> 'trash' AND m.meta_key = %s", $key
+            ));
+        };
+        $queued = 0;
+        foreach ((_get_cron_array() ?: []) as $events) {
+            foreach (['cloakwp_media_offload_attachment', 'cloakwp_media_offload_cleanup', 'cloakwp_media_offload_batch'] as $hook) {
+                $queued += count($events[$hook] ?? []);
+            }
+        }
+        $report = [
+            'site_id' => get_current_blog_id(),
+            'attachments' => (int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = 'attachment' AND post_status <> 'trash'"),
+            'with_manifest' => $count(Offloader::META),
+            'with_error' => $count(Offloader::ERROR),
+            'queued_jobs' => $queued,
+            'wp_cron_disabled' => defined('DISABLE_WP_CRON') && DISABLE_WP_CRON,
+        ];
+        \WP_CLI::log(wp_json_encode($report, JSON_PRETTY_PRINT));
+        if (!empty($assoc['fail-on-errors']) && $report['with_error'] > 0) { \WP_CLI::error('Media offload has stored errors.'); }
+    }
+
     /** Restore verified files for an offloaded attachment without overwriting local files. */
     public function restore(array $args): void
     {

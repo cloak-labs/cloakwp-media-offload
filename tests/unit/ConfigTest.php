@@ -29,4 +29,9 @@ final class ConfigTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         new Config(new S3Storage($client, 'same'), 'https://example.test', 'site/prod', true, false, new S3Storage($client, 'same', true));
     }
+    public function testRejectsAnEmptySiteAllowlist(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        new Config($this->createStub(Storage::class), 'https://example.test', 'site/prod', true, false, null, null, []);
+    }
 }

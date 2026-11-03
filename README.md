@@ -134,9 +134,13 @@ Each revision has a new key when its files change. The adapter uses conditional 
 
 The plugin reads the attachment state from WordPress metadata. It does not make object storage requests for each thumbnail in the media library.
 
+The adapter sends one Content-MD5 checksum per upload. It tells recent AWS SDK versions not to add a second automatic checksum. Cloudflare R2 rejects a request that has both.
+
 ## Use multiple environments
 
 Give local, staging, and production different write prefixes. For example, use `client/local`, `client/staging`, and `client/production`. Give each client a separate bucket when the access policy requires it.
+
+On multisite, `->siteIds([2, 5])` restricts transfers and saved manifest access to those site IDs. The check also applies after `switch_to_blog()`. Use a separate allowlist for each environment.
 
 A database copy keeps the URLs and object keys of existing attachments. New attachments use the write prefix of the current environment. The configured adapter must have read access to the source objects for restore operations.
 
@@ -156,11 +160,16 @@ wp media offload run --all --limit=100
 wp media offload run --all --limit=100 --after=123
 wp media offload run 123 124
 wp media offload status 123
+wp media offload report --fail-on-errors
 ```
 
 The command prints the last attachment ID. Use that value with `--after` for the next batch. The dry run checks the local attachment files. It does not upload files or check the media domain.
 
 The command returns an error if an attachment fails. Correct the error, then retry the affected ID. An attachment is ready for cloud delivery after the upload and metadata checks succeed.
+
+The report shows attachment records with manifests, stored errors, queued jobs, and whether WordPress cron is disabled. A manifest count is not proof that every attachment is current or readable. Check individual files and the job runner as well. If you disable WP-Cron, run the WordPress cron events from a reliable external scheduler.
+
+To install the plugin without scheduling new uploads, add `->automatic(false)` before `->register()`. The explicit WP-CLI and scan operations remain available.
 
 ## Local file removal
 
@@ -200,13 +209,18 @@ To add an R2 private bucket, create a second bucket without public access. Use s
 
 ```php
 ->privateStorage(new S3Storage($privateClient, getenv('R2_PRIVATE_BUCKET'), true))
+->privateDirectory(getenv('WP_PRIVATE_UPLOAD_DIR'))
 ```
+
+`WP_PRIVATE_UPLOAD_DIR` must name an existing directory outside the web root. It must be writable by PHP and the job runner. The plugin uses it for private restore and verification files. It rejects private local files outside that directory when this setting is present. Configure PHP's upload temporary directory outside the web root too. Make private storage persistent across deployments and include it in backups.
+
+If the application stores a private attachment under a portable path marker, use `cloakwp/media-offload/local-path` to resolve that marker to a path inside the private directory. The application must protect the upload before it creates the attachment. This plugin does not know which arbitrary uploads are sensitive and does not move them to the private directory on its own.
 
 The constructor rejects the same S3 bucket for public and private storage. It cannot check the bucket access policy or public domains. The private endpoint checks the user's WordPress login and edit capability. It sends private, no-store cache headers. It sends non-image documents as downloads. Before an attachment has a valid private manifest, the plugin does not return its local attachment URL or original image URL. This does not protect the local file from a direct request.
 
 **Warning:** Protect sensitive local files before you use private storage. WordPress can write uploads into a web-accessible directory. The plugin also restores files there for editing. A private bucket does not protect a public local file. An old public object or cached URL can remain accessible after a privacy change.
 
-The plugin does not move an attachment between public and private storage automatically. For an explicit change, use `wp media offload run <id> --allow-visibility-change`. A move to private storage does not revoke the old public object. A move to public storage can expose the file.
+The plugin does not move an attachment between public and private storage automatically. For an explicit change, use `wp media offload run <id> --allow-visibility-change`. A move to private storage does not revoke the old public object. A move to public storage can expose the file. A configured private directory may require a separate application-specific file staging step before a visibility change.
 
 ## Change old URLs
 

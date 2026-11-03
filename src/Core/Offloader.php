@@ -10,8 +10,14 @@ final class Offloader
 
     public function __construct(private readonly Config $config) {}
 
+    public function siteAllowed(): bool
+    {
+        return $this->config->siteIds === null || in_array((int) get_current_blog_id(), $this->config->siteIds, true);
+    }
+
     public function eligible(int $id): bool
     {
+        if (!$this->siteAllowed()) { return false; }
         $post = get_post($id);
         if (!$post || $post->post_type !== 'attachment' || $post->post_status === 'trash') { return false; }
         if ($this->isPrivate($id) && !$this->config->privateStorage) { return false; }
@@ -34,14 +40,75 @@ final class Offloader
         return $this->config->storage;
     }
 
-    /** Inventory only files explicitly identified by WordPress metadata. */
-    public function inventory(int $id): array
+    private function attachedPath(int $id): mixed
     {
-        $file = get_attached_file($id, true);
-        if (!is_string($file) || $file === '') { throw new \RuntimeException('Attachment has no local file path.'); }
+        return apply_filters('cloakwp/media-offload/local-path', get_attached_file($id, true), $id);
+    }
+
+    private function localBase(int $id): string
+    {
+        if ($this->isPrivate($id) && $this->config->privateDirectory !== null) {
+            return $this->privateBase();
+        }
         $uploads = wp_get_upload_dir();
         $base = realpath($uploads['basedir']);
         if (!$base) { throw new \RuntimeException('Upload directory does not exist.'); }
+        return $base;
+    }
+
+    private function privateBase(): string
+    {
+        $base = $this->config->privateDirectory !== null ? realpath($this->config->privateDirectory) : false;
+        if (!$base || !is_dir($base)) { throw new \RuntimeException('Private directory is unavailable.'); }
+        $webRoots = [ABSPATH, WP_CONTENT_DIR, dirname(rtrim(ABSPATH, '/\\'))];
+        if (!empty($_SERVER['DOCUMENT_ROOT'])) { $webRoots[] = (string) $_SERVER['DOCUMENT_ROOT']; }
+        foreach ($webRoots as $webRoot) {
+            $real = realpath($webRoot);
+            if ($real && ($base === $real || str_starts_with($base, $real . DIRECTORY_SEPARATOR))) {
+                throw new \RuntimeException('Private directory must be outside the web root.');
+            }
+        }
+        return $base;
+    }
+
+    private function safeDirectory(string $base, string $dir, int $mode = 0700): string
+    {
+        if (!str_starts_with($dir, $base . DIRECTORY_SEPARATOR)) { throw new \RuntimeException('Unsafe attachment directory.'); }
+        $relative = substr($dir, strlen($base) + 1);
+        $current = $base;
+        foreach (explode(DIRECTORY_SEPARATOR, $relative) as $part) {
+            if ($part === '' || $part === '.' || $part === '..') { throw new \RuntimeException('Unsafe attachment directory.'); }
+            $current .= DIRECTORY_SEPARATOR . $part;
+            if (is_link($current) || (!is_dir($current) && !@mkdir($current, $mode) && !is_dir($current))) {
+                throw new \RuntimeException('Cannot create a safe attachment directory.');
+            }
+        }
+        $real = realpath($current);
+        if (!$real || !str_starts_with($real, $base . DIRECTORY_SEPARATOR)) { throw new \RuntimeException('Unsafe attachment directory.'); }
+        return $real;
+    }
+
+    /** Create private scratch files under the configured protected directory. */
+    public function temporaryFile(bool $private): string
+    {
+        $dir = sys_get_temp_dir();
+        if ($private && $this->config->privateDirectory !== null) {
+            $root = $this->privateBase();
+            $dir = $this->safeDirectory($root, $root . DIRECTORY_SEPARATOR . '.scratch');
+        }
+        $temp = tempnam($dir, 'cloakwp-');
+        if ($temp === false) { throw new \RuntimeException('Cannot create a temporary file.'); }
+        @chmod($temp, 0600);
+        return $temp;
+    }
+
+    /** Inventory only files explicitly identified by WordPress metadata. */
+    public function inventory(int $id): array
+    {
+        if (!$this->siteAllowed()) { throw new \RuntimeException('Media offload is not enabled for this site.'); }
+        $file = $this->attachedPath($id);
+        if (!is_string($file) || $file === '') { throw new \RuntimeException('Attachment has no local file path.'); }
+        $base = $this->localBase($id);
         $dir = dirname($file);
         $meta = wp_get_attachment_metadata($id, true);
         $meta = is_array($meta) ? $meta : [];
@@ -81,7 +148,7 @@ final class Offloader
         if (!add_option($lock, $token, '', false)) { throw new \RuntimeException('Attachment is already being processed; inspect its lock if a prior job crashed.'); }
         try {
             $previous = $this->state($id);
-            if ($previous && !is_file((string) get_attached_file($id, true))) { $this->restore($id); }
+            if ($previous && !is_file((string) $this->attachedPath($id))) { $this->restore($id); }
             $files = $this->inventory($id);
             $metadata = wp_get_attachment_metadata($id, true);
             $private = $this->isPrivate($id);
@@ -93,7 +160,7 @@ final class Offloader
             foreach ($files as $name => $entry) { $revisionParts[$name] = $entry['sha256']; }
             $revision = hash('sha256', wp_json_encode($revisionParts));
             $blog = function_exists('get_current_blog_id') ? get_current_blog_id() : 1;
-            $relative = is_array($metadata) && !empty($metadata['file']) ? trim(str_replace('\\', '/', dirname((string) $metadata['file'])), './') : '';
+            $relative = !$private || $this->config->privateDirectory === null ? (is_array($metadata) && !empty($metadata['file']) ? trim(str_replace('\\', '/', dirname((string) $metadata['file'])), './') : '') : '';
             if ($relative !== '' && (str_contains($relative, '..') || str_starts_with($relative, '/'))) { throw new \RuntimeException('Unsafe attachment metadata path.'); }
             $directory = trim($this->config->prefix, '/') . '/site-' . $blog . '/attachment-' . $id . '/' . $revision . ($relative !== '' ? '/' . $relative : '');
             $manifest = [];
@@ -111,7 +178,7 @@ final class Offloader
             if ($metadata !== wp_get_attachment_metadata($id, true) || $files !== $this->inventory($id) || $private !== $this->isPrivate($id)) {
                 throw new \RuntimeException('Attachment changed during upload; retry it.');
             }
-            $main = basename((string) get_attached_file($id, true));
+            $main = basename((string) $this->attachedPath($id));
             $state = ['version' => 1, 'url' => rtrim($this->config->publicUrl, '/'), 'directory' => $directory,
                 'main' => $main, 'files' => $manifest, 'private' => $private, 'metadata_hash' => hash('sha256', serialize($metadata))];
             update_post_meta($id, self::META, $state);
@@ -125,6 +192,7 @@ final class Offloader
 
     public function state(int $id): ?array
     {
+        if (!$this->siteAllowed()) { return null; }
         $state = get_post_meta($id, self::META, true);
         if (!is_array($state) || empty($state['directory']) || empty($state['url']) || empty($state['main'])) { return null; }
         return $state;
@@ -135,7 +203,7 @@ final class Offloader
         $state = $this->state($id);
         return $state && isset($state['metadata_hash'])
             && hash_equals($state['metadata_hash'], hash('sha256', serialize(wp_get_attachment_metadata($id, true))))
-            && basename((string) get_attached_file($id, true)) === $state['main']
+            && basename((string) $this->attachedPath($id)) === $state['main']
             && !empty($state['private']) === $this->isPrivate($id);
     }
 
@@ -144,12 +212,14 @@ final class Offloader
     {
         $state = $this->state($id);
         if (!$state) { throw new \RuntimeException('Attachment has not been offloaded.'); }
-        $path = get_attached_file($id, true);
+        $path = $this->attachedPath($id);
         if (!is_string($path) || $path === '') { throw new \RuntimeException('Attachment path is missing.'); }
-        $uploads = wp_get_upload_dir();
-        $base = realpath($uploads['basedir']);
+        $base = $this->localBase($id);
         $dir = dirname($path);
-        if (!$base || !wp_mkdir_p($dir) || !($real = realpath($dir)) || !($real === $base || str_starts_with($real, $base . DIRECTORY_SEPARATOR))) { throw new \RuntimeException('Unsafe restore directory.'); }
+        $protected = !empty($state['private']);
+        $baseMode = fileperms($base);
+        $directoryMode = $protected ? 0700 : ($baseMode === false ? 0755 : ($baseMode & 0777));
+        $real = $dir === $base ? $base : $this->safeDirectory($base, $dir, $directoryMode);
         $count = 0;
         foreach ($state['files'] as $name => $entry) {
             if (basename($name) !== $name) { throw new \RuntimeException('Unsafe restore filename.'); }
@@ -163,6 +233,9 @@ final class Offloader
             try {
                 $this->storageFor(!empty($state['private']))->download($entry['key'], $temp);
                 if (filesize($temp) !== $entry['size'] || hash_file('sha256', $temp) !== $entry['sha256']) { throw new \RuntimeException('Downloaded file failed verification: ' . $name); }
+                $dirMode = fileperms($real);
+                $fileMode = $protected ? 0600 : ($dirMode === false ? 0644 : ($dirMode & 0666));
+                if (!chmod($temp, $fileMode)) { throw new \RuntimeException('Cannot set restored file permissions: ' . $name); }
                 if (!link($temp, $dest)) { throw new \RuntimeException('Cannot safely restore file: ' . $name); }
                 ++$count;
             } finally { @unlink($temp); }
@@ -191,8 +264,7 @@ final class Offloader
                 if ($entry['sha256'] !== $saved['sha256'] || $entry['size'] !== $saved['size']) { throw new \RuntimeException('Local file changed: ' . $name); }
                 $remote = $storage->inspect($saved['key']);
                 if (!$remote || $remote['size'] !== $saved['size'] || !hash_equals($saved['sha256'], $remote['sha256'])) { throw new \RuntimeException('Remote verification failed: ' . $name); }
-                $temp = tempnam(sys_get_temp_dir(), 'cloakwp-verify-');
-                if ($temp === false) { throw new \RuntimeException('Cannot create a verification file.'); }
+                $temp = $this->temporaryFile(!empty($state['private']));
                 try { $this->download($id, $name, $temp); }
                 finally { @unlink($temp); }
                 $like = '%' . $wpdb->esc_like($name) . '%';
@@ -226,7 +298,7 @@ final class Offloader
         if (!$this->state($id)) { throw new \RuntimeException('Attachment has not been offloaded.'); }
         $this->restore($id);
         $c = $this->config;
-        return (new self(new Config($c->storage, $c->publicUrl, trim($prefix, '/'), false, false, $c->privateStorage)))->offload($id);
+        return (new self(new Config($c->storage, $c->publicUrl, trim($prefix, '/'), false, false, $c->privateStorage, $c->privateDirectory, $c->siteIds)))->offload($id);
     }
 
     /** Map legacy WordPress upload URLs to verified public object URLs. */

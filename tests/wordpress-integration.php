@@ -84,6 +84,8 @@ try {
     $storage->corrupt = false;
     wp_update_image_subsizes($id);
     check_offload(is_file($main) && file_get_contents($main) === $original, 'Regeneration did not restore the file');
+    clearstatcache(true, $main);
+    check_offload((fileperms($main) & 0666) === (fileperms(dirname($main)) & 0666), 'Public restore did not inherit directory access permissions');
     file_put_contents($main, 'different');
     try { $offloader->restore($id); throw new RuntimeException('Overwrite was accepted'); } catch (RuntimeException $e) { if ($e->getMessage() === 'Overwrite was accepted') throw $e; }
     file_put_contents($main, $original);
