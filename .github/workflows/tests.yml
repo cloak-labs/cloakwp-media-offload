@@ -23,3 +23,48 @@ jobs:
       - run: composer validate --strict --no-check-publish
       - run: composer test
       - run: composer test:http
+  wordpress:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - php: '8.2'
+            wordpress: '6.7.1'
+          - php: '8.4'
+            wordpress: '7.1.3'
+    services:
+      database:
+        image: mariadb:10.11
+        env:
+          MARIADB_ROOT_PASSWORD: wordpress
+          MARIADB_DATABASE: wordpress
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s --health-timeout=5s --health-retries=12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: curl, gd, mbstring, mysqli, zip
+          tools: composer:v2
+      - run: composer install --no-interaction --prefer-dist
+      - name: Install WordPress and WP-CLI
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -o "$RUNNER_TEMP/wp"
+          chmod +x "$RUNNER_TEMP/wp"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/wp" core download --path="$RUNNER_TEMP/site/public/wordpress" --version="${{ matrix.wordpress }}" --allow-root
+          "$RUNNER_TEMP/wp" config create --path="$RUNNER_TEMP/site/public/wordpress" --dbname=wordpress --dbuser=root --dbpass=wordpress --dbhost=127.0.0.1 --allow-root
+          "$RUNNER_TEMP/wp" config set WP_ENV development --path="$RUNNER_TEMP/site/public/wordpress" --allow-root
+          "$RUNNER_TEMP/wp" config set WP_DB local --path="$RUNNER_TEMP/site/public/wordpress" --allow-root
+          "$RUNNER_TEMP/wp" core multisite-install --path="$RUNNER_TEMP/site/public/wordpress" --url=http://localhost --title='Media offload test' --admin_user=admin --admin_password=integration-test-only --admin_email=admin@example.test --skip-email --allow-root
+          "$RUNNER_TEMP/wp" site create --path="$RUNNER_TEMP/site/public/wordpress" --slug=second --title='Second site' --email=admin@example.test --allow-root
+      - name: Run WordPress integration tests
+        run: |
+          for test in wordpress-integration wordpress-private-directory wordpress-batch wordpress-migration; do
+            wp eval-file "$GITHUB_WORKSPACE/tests/$test.php" --path="$RUNNER_TEMP/site/public/wordpress" --url=http://localhost --allow-root
+          done
