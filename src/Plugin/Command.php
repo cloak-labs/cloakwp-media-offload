@@ -21,6 +21,7 @@ final class Command
      */
     public function run(array $args, array $assoc): void
     {
+        $this->requireSite();
         $limit = max(1, min(1000, (int) ($assoc['limit'] ?? 100)));
         $after = max(0, (int) ($assoc['after'] ?? 0));
         if (!empty($assoc['all'])) {
@@ -44,6 +45,7 @@ final class Command
     /** Show the saved offload state and last error for an attachment. */
     public function status(array $args): void
     {
+        $this->requireSite();
         if (empty($args[0])) { \WP_CLI::error('Provide an attachment ID.'); }
         $id = (int) $args[0];
         $state = $this->offloader->state($id);
@@ -59,6 +61,7 @@ final class Command
      */
     public function report(array $args, array $assoc): void
     {
+        $this->requireSite();
         global $wpdb;
         $count = static function (string $key) use ($wpdb): int {
             return (int) $wpdb->get_var($wpdb->prepare(
@@ -86,6 +89,7 @@ final class Command
     /** Restore verified files for an offloaded attachment without overwriting local files. */
     public function restore(array $args): void
     {
+        $this->requireSite();
         if (empty($args[0])) { \WP_CLI::error('Provide an attachment ID.'); }
         try { $count = $this->offloader->restore((int) $args[0]); \WP_CLI::success("Restored {$count} files."); }
         catch (\Throwable $e) { \WP_CLI::error($e->getMessage()); }
@@ -94,6 +98,7 @@ final class Command
     /** Remove local files after checking the entire attachment and all remote objects. */
     public function cleanup(array $args): void
     {
+        $this->requireSite();
         if (empty($args[0])) { \WP_CLI::error('Provide an attachment ID.'); }
         try { $count = $this->offloader->cleanup((int) $args[0]); \WP_CLI::success("Removed {$count} verified local files."); }
         catch (\Throwable $e) { \WP_CLI::error($e->getMessage()); }
@@ -109,6 +114,7 @@ final class Command
      */
     public function promote(array $args, array $assoc): void
     {
+        $this->requireSite();
         if (empty($args[0]) || empty($assoc['prefix'])) { \WP_CLI::error('Provide an attachment ID and --prefix.'); }
         if (empty($assoc['apply'])) { \WP_CLI::log('Dry run: promotion requires --apply.'); return; }
         try { $state = $this->offloader->promote((int) $args[0], (string) $assoc['prefix']); \WP_CLI::success('Promoted to ' . $state['directory']); }
@@ -126,6 +132,7 @@ final class Command
      */
     public function map(array $args, array $assoc): void
     {
+        $this->requireSite();
         global $wpdb;
         $after = max(0, (int) ($assoc['after'] ?? 0));
         $limit = max(1, min(10000, (int) ($assoc['limit'] ?? 1000)));
@@ -157,6 +164,7 @@ final class Command
      */
     public function rewrite_posts(array $args, array $assoc): void
     {
+        $this->requireSite();
         global $wpdb;
         $rewriter = $this->rewriter($assoc);
         $after = max(0, (int) ($assoc['after'] ?? 0));
@@ -187,6 +195,7 @@ final class Command
      */
     public function rewrite_meta(array $args, array $assoc): void
     {
+        $this->requireSite();
         global $wpdb;
         $rewriter = $this->rewriter($assoc);
         $after = max(0, (int) ($assoc['after'] ?? 0));
@@ -219,6 +228,7 @@ final class Command
      */
     public function rewrite_options(array $args, array $assoc): void
     {
+        $this->requireSite();
         global $wpdb;
         $rewriter = $this->rewriter($assoc);
         $after = max(0, (int) ($assoc['after'] ?? 0));
@@ -238,6 +248,11 @@ final class Command
             \WP_CLI::log(($assoc['apply'] ?? false ? 'Updated ' : 'Would update ') . 'option ' . $row->option_id . ' (' . $row->option_name . ')');
         }
         \WP_CLI::log('Resume after option ID ' . ($rows ? (int) end($rows)->option_id : $after));
+    }
+
+    private function requireSite(): void
+    {
+        if (!$this->offloader->siteAllowed()) { \WP_CLI::error('Media offloading is not enabled for this site.'); }
     }
 
     private function rewriter(array $assoc): UrlRewriter

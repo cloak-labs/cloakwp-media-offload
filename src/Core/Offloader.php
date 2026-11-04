@@ -91,6 +91,7 @@ final class Offloader
     /** Create private scratch files under the configured protected directory. */
     public function temporaryFile(bool $private): string
     {
+        if (!$this->siteAllowed()) { throw new \RuntimeException('Media offload is not enabled for this site.'); }
         $dir = sys_get_temp_dir();
         if ($private && $this->config->privateDirectory !== null) {
             $root = $this->privateBase();
@@ -246,6 +247,7 @@ final class Offloader
     /** Remove only a complete, unchanged, remotely verified attachment. */
     public function cleanup(int $id): int
     {
+        if (!$this->siteAllowed()) { throw new \RuntimeException('Media offload is not enabled for this site.'); }
         $lock = '_cloakwp_offload_lock_' . $id;
         $token = wp_generate_uuid4();
         if (!add_option($lock, $token, '', false)) { throw new \RuntimeException('Attachment is already being processed.'); }

@@ -13,6 +13,7 @@ final class Batch
     public function register(): void { add_action(self::EVENT, [$this, 'run']); }
     public function start(): void
     {
+        if (!$this->offloader->siteAllowed()) { throw new \RuntimeException('Media offloading is not enabled for this site.'); }
         $state = get_option(self::OPTION);
         if (is_array($state) && ($state['status'] ?? '') === 'running') { throw new \RuntimeException('A scan is already running.'); }
         if (is_array($state) && in_array($state['status'] ?? '', ['failed', 'cancelled'], true)) {
@@ -28,12 +29,14 @@ final class Batch
     }
     public function cancel(): void
     {
+        if (!$this->offloader->siteAllowed()) { throw new \RuntimeException('Media offloading is not enabled for this site.'); }
         $state = get_option(self::OPTION);
         if (is_array($state)) { $state['status'] = 'cancelled'; update_option(self::OPTION, $state, false); }
         wp_clear_scheduled_hook(self::EVENT);
     }
     public function run(): void
     {
+        if (!$this->offloader->siteAllowed()) { return; }
         $state = get_option(self::OPTION);
         if (!is_array($state) || ($state['status'] ?? '') !== 'running') { return; }
         $token = wp_generate_uuid4();

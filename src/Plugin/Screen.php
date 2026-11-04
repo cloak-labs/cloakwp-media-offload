@@ -11,10 +11,10 @@ final class Screen
         add_action('admin_menu', [$this, 'menu']);
         add_action('admin_post_cloakwp_media_offload_batch', [$this, 'batch']);
     }
-    public function menu(): void { add_media_page('Offload Media', 'Offload Media', 'manage_options', 'media-offload', [$this, 'render']); }
+    public function menu(): void { if ($this->offloader->siteAllowed()) { add_media_page('Offload Media', 'Offload Media', 'manage_options', 'media-offload', [$this, 'render']); } }
     public function batch(): void
     {
-        if (!current_user_can('manage_options')) { wp_die('You cannot manage media offloading.'); }
+        if (!$this->offloader->siteAllowed() || !current_user_can('manage_options')) { wp_die('You cannot manage media offloading.'); }
         check_admin_referer('cloakwp_media_offload_batch');
         $batch = new Batch($this->offloader, $this->integration);
         try {
@@ -27,7 +27,7 @@ final class Screen
     }
     public function render(): void
     {
-        if (!current_user_can('manage_options')) { return; }
+        if (!$this->offloader->siteAllowed() || !current_user_can('manage_options')) { return; }
         $state = get_option(Batch::OPTION);
         $running = is_array($state) && ($state['status'] ?? '') === 'running';
         echo '<div class="wrap"><h1>Offload Media</h1><p>Scan attachments in the background. Existing local files follow the configured retention policy. WordPress cron must run for processing to continue.</p>';

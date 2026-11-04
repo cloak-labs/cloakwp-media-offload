@@ -140,7 +140,7 @@ The adapter sends one Content-MD5 checksum per upload. It tells recent AWS SDK v
 
 Give local, staging, and production different write prefixes. For example, use `client/local`, `client/staging`, and `client/production`. Give each client a separate bucket when the access policy requires it.
 
-On multisite, `->siteIds([2, 5])` restricts transfers and saved manifest access to those site IDs. The check also applies after `switch_to_blog()`. Use a separate allowlist for each environment.
+On multisite, `->siteIds([2, 5])` restricts transfers, manifest access, scans, and commands to those site IDs. The check also applies after `switch_to_blog()`. Media filters leave other sites' URLs and responsive images unchanged. Use a separate allowlist for each environment.
 
 A database copy keeps the URLs and object keys of existing attachments. New attachments use the write prefix of the current environment. The configured adapter must have read access to the source objects for restore operations.
 

@@ -35,10 +35,38 @@ try {
     if ($otherSites) {
         switch_to_blog((int) $otherSites[0]);
         try {
+            $integration = new \CloakWP\MediaOffload\Plugin\Integration($scoped, $scopedConfig);
+            $url = 'https://example.test/private-fixture.jpg';
+            $sources = [100 => ['url' => $url, 'descriptor' => 'w', 'value' => 100]];
+            $forcePrivate = static fn(bool $private): bool => true;
+            add_filter('cloakwp/media-offload/private', $forcePrivate, 100);
             if ($scoped->siteAllowed() || $scoped->eligible($id) || $scoped->state($id) !== null
-                || (new \CloakWP\MediaOffload\Plugin\Integration($scoped, $scopedConfig))->schedule($id)) {
+                || $integration->schedule($id) || $integration->offloader(null) !== null
+                || $integration->url($url, $id) !== $url || $integration->originalUrl($url, $id) !== $url
+                || $integration->srcset($sources, [100, 100], $url, [], $id) !== $sources
+                || $integration->privateImage(false, $id, 'thumbnail') !== false) {
                 throw new RuntimeException('Site allowlist was bypassed after switching blogs.');
             }
+            remove_filter('cloakwp/media-offload/private', $forcePrivate, 100);
+            $batch = new \CloakWP\MediaOffload\Plugin\Batch($scoped, $integration);
+            $before = get_option(\CloakWP\MediaOffload\Plugin\Batch::OPTION, null);
+            foreach (['start', 'cancel'] as $operation) {
+                try { $batch->$operation(); throw new RuntimeException('A batch operation was allowed on another site.'); }
+                catch (RuntimeException $error) {
+                    if ($error->getMessage() === 'A batch operation was allowed on another site.') { throw $error; }
+                }
+            }
+            $batch->run();
+            if (get_option(\CloakWP\MediaOffload\Plugin\Batch::OPTION, null) !== $before) {
+                throw new RuntimeException('A batch changed state on another site.');
+            }
+            foreach (['temporaryFile', 'cleanup'] as $operation) {
+                try { $scoped->$operation($operation === 'temporaryFile' ? true : $id); throw new RuntimeException('A storage operation was allowed on another site.'); }
+                catch (RuntimeException $error) {
+                    if ($error->getMessage() === 'A storage operation was allowed on another site.') { throw $error; }
+                }
+            }
+            (new \CloakWP\MediaOffload\Plugin\Screen($scoped, $integration))->menu();
         } finally { restore_current_blog(); }
     }
     $resolved = $temp . '/private/../escape.pdf';

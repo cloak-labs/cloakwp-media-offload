@@ -29,7 +29,7 @@ final class Integration
         }
         if (is_admin()) { (new Screen($this->offloader, $this))->register(); }
     }
-    public function offloader(mixed $existing): mixed { return $existing ?? $this->offloader; }
+    public function offloader(mixed $existing): mixed { return $this->offloader->siteAllowed() ? ($existing ?? $this->offloader) : $existing; }
     public function metadata(mixed $metadata, int $id): mixed { $this->schedule($id); return $metadata; }
     public function schedule(int $id): bool
     {
@@ -74,6 +74,7 @@ final class Integration
     }
     public function url(string $url, int $id): string
     {
+        if (!$this->offloader->siteAllowed()) { return $url; }
         $state = $this->offloader->state($id);
         if (!$state) { return $this->offloader->isPrivate($id) ? '' : $url; }
         if (!$this->current($state, $id)) {
@@ -91,6 +92,7 @@ final class Integration
     }
     public function originalUrl(string $url, int $id): string
     {
+        if (!$this->offloader->siteAllowed()) { return $url; }
         $state = $this->offloader->state($id);
         if (!$state || empty($state['private']) || !$this->current($state, $id)) {
             return (!empty($state['private']) || $this->offloader->isPrivate($id)) ? '' : $url;
@@ -101,7 +103,7 @@ final class Integration
     }
     public function privateImage(mixed $result, int $id, mixed $size): mixed
     {
-        if ($result) { return $result; }
+        if ($result || !$this->offloader->siteAllowed()) { return $result; }
         $state = $this->offloader->state($id);
         if (!$state || empty($state['private']) || !$this->current($state, $id) || !wp_attachment_is_image($id)) { return $result; }
         $meta = wp_get_attachment_metadata($id);
@@ -149,7 +151,7 @@ final class Integration
     }
     public function attachmentId(mixed $found, string $url): mixed
     {
-        if ($found !== null) { return $found; }
+        if ($found !== null || !$this->offloader->siteAllowed()) { return $found; }
         $path = parse_url($url, PHP_URL_PATH);
         if (!is_string($path) || !preg_match('~/site-[0-9]+/attachment-([0-9]+)/[a-f0-9]{64}/~', $path, $matches)) { return null; }
         $id = (int) $matches[1];
@@ -162,6 +164,7 @@ final class Integration
     }
     public function srcset(array $sources, array $size, string $src, array $meta, int $id): array
     {
+        if (!$this->offloader->siteAllowed()) { return $sources; }
         $state = $this->offloader->state($id);
         if (!empty($state['private']) || $this->offloader->isPrivate($id)) { return []; }
         if (!$state || !empty($state['private']) || !$this->current($state, $id)) { return $sources; }
