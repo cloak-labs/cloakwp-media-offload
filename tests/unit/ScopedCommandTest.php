@@ -33,7 +33,7 @@ namespace CloakWP\MediaOffload\Tests {
         {
             return [
                 ['run', [[], []]], ['status', [[]]], ['report', [[], []]], ['restore', [[]]],
-                ['cleanup', [[]]], ['promote', [[], []]], ['map', [[], []]],
+                ['cleanup', [[]]], ['promote', [[], []]], ['map', [[], []]], ['verify', [[]]],
                 ['rewrite_posts', [[], []]], ['rewrite_meta', [[], []]], ['rewrite_options', [[], []]],
             ];
         }

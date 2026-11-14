@@ -12,7 +12,7 @@ The plugin does not replace WordPress image processing. WordPress creates the im
 
 ## Status
 
-This is a beta release. The local tests use a simulated S3-compatible service. We have not completed an end-to-end test with R2. Use a test site and a test bucket before production use.
+Use a disposable site to verify your R2 or S3-compatible bucket, public hostname, and restore path before enabling a production site.
 
 Local files stay on the server by default. The plugin does not delete remote objects. Keep separate backups of the database and the objects.
 
@@ -33,6 +33,7 @@ Local files stay on the server by default. The plugin does not delete remote obj
 
 - WordPress with a writable uploads directory and a working WP-Cron scheduler.
 - PHP 8.2 or later.
+- MySQL or MariaDB with a WordPress connection that supports advisory locks.
 - Composer 2 for a Composer install or a source ZIP build.
 - WP-CLI for command-line operations.
 - A supported object store and credentials for its S3-compatible API.
@@ -120,6 +121,7 @@ add_action('plugins_loaded', static function (): void {
             getenv('MEDIA_PUBLIC_URL'),
             getenv('MEDIA_WRITE_PREFIX'),
         )
+        ->verifyPublicDelivery()
         ->register();
 });
 ```
@@ -130,7 +132,7 @@ For S3, use the provider endpoint and region in the client configuration. Grant 
 
 The media domain must serve the bucket root. The plugin adds the complete object key to that URL. The key contains the prefix, site ID, attachment ID, and a revision digest.
 
-Each revision has a new key when its files change. The adapter uses conditional writes to prevent replacement of an existing object. It sends a Content-MD5 value and stores SHA-256 metadata.
+Each revision has a new key when its files change. The adapter uses conditional writes to prevent replacement of an existing object. It sends a Content-MD5 value and stores SHA-256 metadata. With `verifyPublicDelivery()`, each public URL must return HTTP 200 and the expected content length before a new manifest is saved.
 
 The plugin reads the attachment state from WordPress metadata. It does not make object storage requests for each thumbnail in the media library.
 
@@ -142,7 +144,9 @@ Give local, staging, and production different write prefixes. For example, use `
 
 On multisite, `->siteIds([2, 5])` restricts transfers, manifest access, scans, and commands to those site IDs. The check also applies after `switch_to_blog()`. Media filters leave other sites' URLs and responsive images unchanged. Use a separate allowlist for each environment.
 
-A database copy keeps the URLs and object keys of existing attachments. New attachments use the write prefix of the current environment. The configured adapter must have read access to the source objects for restore operations.
+A database copy keeps the URLs and object keys of existing attachments. New attachments use the write prefix of the current environment. Use a shared bucket and stable media URL during development. Share an authoring WordPress database or refresh each developer’s database to get the same attachment IDs and metadata.
+
+At launch, assign the existing bucket to production and revoke development write credentials. Point nonproduction writers at a separate bucket. Public URLs in copied records still render. Configure `publicSources([$productionReader->identity() => $productionReader])` with a read-only S3 adapter to restore copied production images for editing. For manifests written before storage identities were recorded, also key that adapter by the old HTTPS media URL. To suspend transfers while keeping existing media readable, configure `writes(false)`.
 
 The plugin does not copy the database. It does not move objects between buckets. It does not delete objects when a user deletes an attachment. Keep an independent backup and a restore procedure for each environment.
 
@@ -160,14 +164,15 @@ wp media offload run --all --limit=100
 wp media offload run --all --limit=100 --after=123
 wp media offload run 123 124
 wp media offload status 123
-wp media offload report --fail-on-errors
+wp media offload report --fail-on-errors --fail-on-pending
+wp media offload verify --all --public-only --public-http --limit=100
 ```
 
 The command prints the last attachment ID. Use that value with `--after` for the next batch. The dry run checks the local attachment files. It does not upload files or check the media domain.
 
 The command returns an error if an attachment fails. Correct the error, then retry the affected ID. An attachment is ready for cloud delivery after the upload and metadata checks succeed.
 
-The report shows attachment records with manifests, stored errors, queued jobs, and whether WordPress cron is disabled. A manifest count is not proof that every attachment is current or readable. Check individual files and the job runner as well. If you disable WP-Cron, run the WordPress cron events from a reliable external scheduler.
+The report shows attachment records with manifests, stored errors, pending work, queued jobs, and whether WordPress cron is disabled. `verify` checks the current manifest and object metadata. `--public-http` also checks the delivery hostname. Reuse the printed cursor to verify the whole library. A periodic recovery job reschedules pending work after a worker dies or a cron event fails to save. Run the WordPress cron events from a reliable scheduler for each enabled site.
 
 To install the plugin without scheduling new uploads, add `->automatic(false)` before `->register()`. The explicit WP-CLI and scan operations remain available.
 
@@ -199,7 +204,7 @@ Some third-party plugins need a local file in other code paths. Call `Offloader:
 
 ## Private attachments
 
-The plugin treats attachment posts with the WordPress `private` status as private. It excludes them unless you configure a separate private adapter. The `cloakwp/media-offload/private` filter can mark other attachments as private. The `cloakwp/media-offload/eligible` filter can exclude attachments from all transfers.
+The plugin treats attachments as private when they or their parents are private or password-protected. It excludes them unless you configure a separate private adapter. The `cloakwp/media-offload/private` filter can mark other attachments as private. The `cloakwp/media-offload/eligible` filter can exclude attachments from all transfers.
 
 WordPress and other plugins can store sensitive uploads as regular attachments. Their post status alone does not make their files private. Add a site-specific privacy filter for those files before you enable offload.
 
@@ -224,7 +229,7 @@ The plugin does not move an attachment between public and private storage automa
 
 ## Change old URLs
 
-Old URLs can remain in post content, custom fields, and site options. The plugin does not change them during offload. Back up the database before you change those URLs.
+Offload leaves the database content intact. The plugin resolves known same-site uploads URLs at render time in WordPress content, common ACF fields, and CloakWP structured block attributes. Review older origins, custom data, and external consumers separately. Back up the database before applying a permanent URL rewrite.
 
 1. Export a map for the old uploads base URL:
 
@@ -272,9 +277,14 @@ Use a physically separate private bucket for private files. The restore and clea
 
 ## Recovery and limits
 
-A crashed worker can leave an attachment lock in the site options table. Its name is `_cloakwp_offload_lock_<id>`. A crashed scan can leave `_cloakwp_media_offload_batch_lock`. Make sure that no worker is active before you delete a lock.
+Attachment and scan workers use connection-scoped database locks. MySQL or MariaDB releases a lock when its connection closes. Older option-based locks are ignored.
 
-The plugin inventories files in WordPress attachment metadata. It includes the original, image sizes, and known edit backups. It does not copy unrelated files that other plugins put in uploads. It does not find orphan files or change external documents. Audit those files separately.
+If an object is missing, `wp media offload run <id>` can restore the same key from a matching retained local file using the source bucket's writer. A CDN can retain an earlier 404 until expiry or purge. If cloud delivery is unavailable, `preferLocalDelivery()` or the `cloakwp/media-offload/prefer-local` filter switches newly rendered public URLs to a complete hash-matching local revision. Restore local files before a full delivery rollback. Already cached pages and saved cloud URLs still need the original media hostname and keys.
+
+Use `wp media offload run <id> --refresh` after confirming an intentional in-place file replacement. For a file shared by two attachment records, resolve ownership before publishing changed bytes or removing a local file.
+On enrolled sites, ordinary WordPress uploads get a random filename suffix so simultaneous uploads cannot choose the same name. Existing attachment paths continue to be reserved when only the cloud copy is present.
+
+The plugin inventories files in WordPress attachment metadata. It includes the original, image sizes, known edit backups, source-format companions, and animated-image video and poster files. Audit plugin-owned files outside the attachment records before omitting the uploads copy.
 
 The plugin does not configure a Next.js frontend. Add the media domain to `remotePatterns` when your frontend uses Next.js image optimization. Check local-build URL rules and the frontend image loader for your site.
 

@@ -18,6 +18,7 @@ final class Command
      * [--limit=<number>] : Maximum attachments to inspect (default 100).
      * [--dry-run] : Inventory without uploading.
      * [--allow-visibility-change] : Explicitly copy files when public/private classification changed.
+     * [--refresh] : Publish an intentional replacement after verifying the local files.
      */
     public function run(array $args, array $assoc): void
     {
@@ -25,8 +26,7 @@ final class Command
         $limit = max(1, min(1000, (int) ($assoc['limit'] ?? 100)));
         $after = max(0, (int) ($assoc['after'] ?? 0));
         if (!empty($assoc['all'])) {
-            global $wpdb;
-            $ids = $wpdb->get_col($wpdb->prepare("SELECT ID FROM {$wpdb->posts} WHERE post_type = 'attachment' AND ID > %d ORDER BY ID ASC LIMIT %d", $after, $limit));
+            $ids = $this->attachmentIds($after, $limit);
         } else { $ids = array_map('intval', $args); }
         if (!$ids) { \WP_CLI::log('No attachments found.'); return; }
         $failed = 0;
@@ -35,8 +35,13 @@ final class Command
             try {
                 if (!$this->offloader->eligible($id)) { \WP_CLI::log("{$id}: excluded"); continue; }
                 if (!empty($assoc['dry-run'])) { $files = $this->offloader->inventory($id); \WP_CLI::log("{$id}: " . count($files) . ' files'); }
-                else { $state = $this->offloader->offload($id, !empty($assoc['allow-visibility-change'])); \WP_CLI::log("{$id}: offloaded " . count($state['files']) . ' files'); }
-            } catch (\Throwable $e) { ++$failed; \WP_CLI::warning("{$id}: " . $e->getMessage()); }
+                else {
+                    $pending = (string) get_post_meta($id, Offloader::PENDING, true);
+                    $state = $this->offloader->offload($id, !empty($assoc['allow-visibility-change']), !empty($assoc['refresh']));
+                    $this->offloader->completePending($id, $pending);
+                    \WP_CLI::log("{$id}: offloaded " . count($state['files']) . ' files');
+                }
+            } catch (\Throwable $e) { ++$failed; \WP_CLI::warning("{$id}: " . Offloader::errorMessage($e)); }
         }
         \WP_CLI::log('Resume after ID ' . (int) end($ids));
         if ($failed) { \WP_CLI::error("{$failed} attachment(s) failed."); }
@@ -50,7 +55,9 @@ final class Command
         $id = (int) $args[0];
         $state = $this->offloader->state($id);
         $error = get_post_meta($id, Offloader::ERROR, true);
-        \WP_CLI::log(wp_json_encode(['id' => $id, 'offloaded' => $state !== null, 'objects' => $state ? count($state['files']) : 0, 'error' => $error ?: null], JSON_PRETTY_PRINT));
+        \WP_CLI::log(wp_json_encode(['id' => $id, 'offloaded' => $state !== null, 'current' => $this->offloader->current($id),
+            'pending' => (bool) get_post_meta($id, Offloader::PENDING, true), 'objects' => $state ? count($state['files']) : 0,
+            'error' => $error ?: null], JSON_PRETTY_PRINT));
     }
 
     /**
@@ -58,15 +65,18 @@ final class Command
      *
      * ## OPTIONS
      * [--fail-on-errors] : Exit with an error when attachments have stored failures.
+     * [--fail-on-pending] : Exit with an error when attachments have unprocessed work.
      */
     public function report(array $args, array $assoc): void
     {
         $this->requireSite();
         global $wpdb;
         $count = static function (string $key) use ($wpdb): int {
-            return (int) $wpdb->get_var($wpdb->prepare(
+            $value = $wpdb->get_var($wpdb->prepare(
                 "SELECT COUNT(DISTINCT p.ID) FROM {$wpdb->posts} p INNER JOIN {$wpdb->postmeta} m ON m.post_id = p.ID WHERE p.post_type = 'attachment' AND p.post_status <> 'trash' AND m.meta_key = %s", $key
             ));
+            if ($wpdb->last_error || $value === null) { \WP_CLI::error('Could not count media offload records.'); }
+            return (int) $value;
         };
         $queued = 0;
         foreach ((_get_cron_array() ?: []) as $events) {
@@ -74,16 +84,68 @@ final class Command
                 $queued += count($events[$hook] ?? []);
             }
         }
+        $total = $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = 'attachment' AND post_status <> 'trash'");
+        if ($wpdb->last_error || $total === null) { \WP_CLI::error('Could not count attachments.'); }
         $report = [
             'site_id' => get_current_blog_id(),
-            'attachments' => (int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = 'attachment' AND post_status <> 'trash'"),
+            'attachments' => (int) $total,
             'with_manifest' => $count(Offloader::META),
             'with_error' => $count(Offloader::ERROR),
+            'pending' => $count(Offloader::PENDING),
             'queued_jobs' => $queued,
             'wp_cron_disabled' => defined('DISABLE_WP_CRON') && DISABLE_WP_CRON,
         ];
         \WP_CLI::log(wp_json_encode($report, JSON_PRETTY_PRINT));
         if (!empty($assoc['fail-on-errors']) && $report['with_error'] > 0) { \WP_CLI::error('Media offload has stored errors.'); }
+        if (!empty($assoc['fail-on-pending']) && $report['pending'] > 0) { \WP_CLI::error('Media offload has pending attachments.'); }
+    }
+
+    /**
+     * Verify the current manifest and remote files for one or more attachments.
+     *
+     * ## OPTIONS
+     * [<id>...] : Attachment IDs.
+     * [--all] : Verify attachment records in bounded batches.
+     * [--after=<id>] : Resume after an attachment ID.
+     * [--limit=<number>] : Maximum attachments to inspect (default 100).
+     * [--public-only] : Skip private attachments.
+     * [--public-http] : Also probe the public HTTPS URLs.
+     */
+    public function verify(array $args, array $assoc = []): void
+    {
+        $this->requireSite();
+        if (!$args && empty($assoc['all'])) { \WP_CLI::error('Provide attachment IDs or --all.'); }
+        $ids = empty($assoc['all']) ? $args : $this->attachmentIds(
+            max(0, (int) ($assoc['after'] ?? 0)), max(1, min(1000, (int) ($assoc['limit'] ?? 100)))
+        );
+        if (!$ids) { \WP_CLI::log('No attachments found.'); return; }
+        $failed = false;
+        foreach ($ids as $id) {
+            if (!empty($assoc['public-only']) && get_post_type((int) $id) === 'attachment' && $this->offloader->isPrivate((int) $id)) {
+                \WP_CLI::log("{$id}: private attachment skipped");
+                continue;
+            }
+            try {
+                $state = $this->offloader->verify((int) $id, !empty($assoc['public-http']));
+                \WP_CLI::log("{$id}: verified " . count($state['files']) . ' files');
+            } catch (\Throwable $error) {
+                \WP_CLI::warning("{$id}: " . Offloader::errorMessage($error));
+                $failed = true;
+            }
+        }
+        if (!empty($assoc['all'])) { \WP_CLI::log('Resume after ID ' . (int) end($ids)); }
+        if ($failed) { \WP_CLI::error('Media verification failed.'); }
+    }
+
+    private function attachmentIds(int $after, int $limit): array
+    {
+        global $wpdb;
+        $ids = $wpdb->get_col($wpdb->prepare(
+            "SELECT ID FROM {$wpdb->posts} WHERE post_type = 'attachment' AND post_status <> 'trash' AND ID > %d ORDER BY ID ASC LIMIT %d",
+            $after, $limit
+        ));
+        if ($wpdb->last_error) { \WP_CLI::error('Could not list attachments.'); }
+        return $ids;
     }
 
     /** Restore verified files for an offloaded attachment without overwriting local files. */
@@ -92,7 +154,7 @@ final class Command
         $this->requireSite();
         if (empty($args[0])) { \WP_CLI::error('Provide an attachment ID.'); }
         try { $count = $this->offloader->restore((int) $args[0]); \WP_CLI::success("Restored {$count} files."); }
-        catch (\Throwable $e) { \WP_CLI::error($e->getMessage()); }
+        catch (\Throwable $e) { \WP_CLI::error(Offloader::errorMessage($e)); }
     }
 
     /** Remove local files after checking the entire attachment and all remote objects. */
@@ -101,7 +163,7 @@ final class Command
         $this->requireSite();
         if (empty($args[0])) { \WP_CLI::error('Provide an attachment ID.'); }
         try { $count = $this->offloader->cleanup((int) $args[0]); \WP_CLI::success("Removed {$count} verified local files."); }
-        catch (\Throwable $e) { \WP_CLI::error($e->getMessage()); }
+        catch (\Throwable $e) { \WP_CLI::error(Offloader::errorMessage($e)); }
     }
 
     /**
@@ -118,7 +180,7 @@ final class Command
         if (empty($args[0]) || empty($assoc['prefix'])) { \WP_CLI::error('Provide an attachment ID and --prefix.'); }
         if (empty($assoc['apply'])) { \WP_CLI::log('Dry run: promotion requires --apply.'); return; }
         try { $state = $this->offloader->promote((int) $args[0], (string) $assoc['prefix']); \WP_CLI::success('Promoted to ' . $state['directory']); }
-        catch (\Throwable $e) { \WP_CLI::error($e->getMessage()); }
+        catch (\Throwable $e) { \WP_CLI::error(Offloader::errorMessage($e)); }
     }
 
     /**

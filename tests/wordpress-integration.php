@@ -72,10 +72,11 @@ try {
     try { $offloader->cleanup($id); throw new RuntimeException('Corrupt remote cleanup was accepted'); } catch (RuntimeException $e) { if ($e->getMessage() === 'Corrupt remote cleanup was accepted') throw $e; }
     check_offload(is_file($main), 'Corrupt remote cleanup removed local file');
     $storage->corrupt = false;
-    $copy = wp_insert_post(['post_type' => 'post', 'post_status' => 'draft', 'post_title' => 'temporary shared reference']);
+    $copy = wp_insert_post(['post_type' => 'attachment', 'post_status' => 'inherit', 'post_title' => 'temporary shared reference']);
     update_post_meta($copy, '_wp_attached_file', get_post_meta($id, '_wp_attached_file', true));
     try { $offloader->cleanup($id); throw new RuntimeException('Shared file cleanup was accepted'); } catch (RuntimeException $e) { if ($e->getMessage() === 'Shared file cleanup was accepted') throw $e; }
-    wp_delete_post($copy, true);
+    delete_post_meta($copy, '_wp_attached_file');
+    wp_delete_attachment($copy, true);
     check_offload($offloader->cleanup($id) === count($files), 'Verified cleanup did not remove all files');
     check_offload(!is_file($main), 'Cleanup left main file behind');
     $storage->corrupt = true;

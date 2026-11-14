@@ -15,13 +15,17 @@ final class Config
         public readonly ?Storage $privateStorage = null,
         public readonly ?string $privateDirectory = null,
         public readonly ?array $siteIds = null,
+        public readonly array $publicSources = [],
+        public readonly bool $verifyPublicDelivery = false,
+        public readonly bool $writeEnabled = true,
+        public readonly bool $preferLocalDelivery = false,
     ) {
         $parts = parse_url($publicUrl);
         if (!filter_var($publicUrl, FILTER_VALIDATE_URL) || !is_array($parts) || ($parts['scheme'] ?? '') !== 'https'
             || isset($parts['user']) || isset($parts['pass']) || isset($parts['query']) || isset($parts['fragment'])) {
             throw new \InvalidArgumentException('The public media URL must be an HTTPS URL.');
         }
-        if ($prefix === '' || !preg_match('~^[a-zA-Z0-9_/-]+$~', $prefix) || str_contains($prefix, '..')) {
+        if (!preg_match('~^[a-zA-Z0-9_-]+(?:/[a-zA-Z0-9_-]+)*$~D', $prefix)) {
             throw new \InvalidArgumentException('A safe, non-empty environment prefix is required.');
         }
         if ($privateStorage !== null && $privateStorage === $storage) {
@@ -33,6 +37,14 @@ final class Config
         }
         if ($siteIds !== null && (!$siteIds || array_filter($siteIds, static fn($id) => !is_int($id) || $id < 1))) {
             throw new \InvalidArgumentException('Site IDs must be a non-empty list of positive integers.');
+        }
+        foreach ($publicSources as $identity => $source) {
+            $legacyUrl = is_string($identity) && filter_var($identity, FILTER_VALIDATE_URL)
+                && parse_url($identity, PHP_URL_SCHEME) === 'https';
+            if (!is_string($identity) || $identity === '' || !$source instanceof Storage
+                || ($source instanceof S3Storage && ($source->isPrivate() || (!$legacyUrl && $source->identity() !== $identity)))) {
+                throw new \InvalidArgumentException('Invalid public restore source.');
+            }
         }
     }
 }
