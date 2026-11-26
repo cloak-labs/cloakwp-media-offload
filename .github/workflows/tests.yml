@@ -66,6 +66,6 @@ jobs:
           "$RUNNER_TEMP/wp" site create --path="$RUNNER_TEMP/site/public/wordpress" --slug=second --title='Second site' --email=admin@example.test --allow-root
       - name: Run WordPress integration tests
         run: |
-          for test in wordpress-integration wordpress-private-directory wordpress-batch wordpress-migration; do
-            wp eval-file "$GITHUB_WORKSPACE/tests/$test.php" --path="$RUNNER_TEMP/site/public/wordpress" --url=http://localhost --allow-root
+          for test in wordpress-integration wordpress-private-directory wordpress-batch wordpress-migration wordpress-shared-bucket; do
+            wp eval-file "$GITHUB_WORKSPACE/tests/$test.php" --use-include --path="$RUNNER_TEMP/site/public/wordpress" --url=http://localhost --allow-root
           done

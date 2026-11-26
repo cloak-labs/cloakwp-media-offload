@@ -25,11 +25,12 @@ if (!is_array($config) || !preg_match('~^https://[a-f0-9]{32}\.r2\.cloudflaresto
     || empty($config['bucket']) || empty($config['key']) || empty($config['secret'])) {
     throw new RuntimeException('Public R2 test configuration is invalid.');
 }
+$url = rtrim($url, '/');
 $client = new S3Client(['version' => 'latest', 'region' => 'auto', 'endpoint' => $config['endpoint'], 'use_path_style_endpoint' => true,
     'credentials' => ['key' => $config['key'], 'secret' => $config['secret']]]);
 $prefix = 'media/cloakwp-synthetic-test/' . wp_generate_uuid4();
 $storage = new S3Storage($client, $config['bucket']);
-$settings = new Config($storage, $config['url'], $prefix, false, false);
+$settings = new Config($storage, $config['url'], $prefix, false, false, verifyPublicDelivery: true);
 $offloader = new Offloader($settings);
 (new Integration($offloader, $settings))->register();
 $id = 0;
@@ -45,7 +46,7 @@ try {
     wp_update_attachment_metadata($id, wp_generate_attachment_metadata($id, $upload['file']));
     $state = $offloader->offload($id);
     $url = wp_get_attachment_url($id);
-    if (!is_string($url) || !str_starts_with($url, $config['url'] . '/' . $prefix . '/')) { throw new RuntimeException('WordPress did not return the expected public URL.'); }
+    if (!is_string($url) || !str_starts_with($url, $settings->publicUrl . '/' . $prefix . '/')) { throw new RuntimeException('WordPress did not return the expected public URL.'); }
     $response = wp_remote_get($url, ['timeout' => 30, 'redirection' => 0]);
     if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) { throw new RuntimeException('Public media domain did not serve the test image.'); }
     if (hash('sha256', wp_remote_retrieve_body($response)) !== $state['files'][$state['main']]['sha256']) { throw new RuntimeException('Public media bytes did not match.'); }
@@ -53,7 +54,7 @@ try {
     if (!str_contains($cache, 'immutable') || !str_contains($cache, 'max-age=31536000')) { throw new RuntimeException('Public media cache headers were not preserved.'); }
     if (attachment_url_to_postid($url) !== $id) { throw new RuntimeException('Public URL did not resolve to the attachment.'); }
     $sizes = wp_get_attachment_image_src($id, 'thumbnail');
-    if (!is_array($sizes) || !str_starts_with($sizes[0], $config['url'] . '/')) { throw new RuntimeException('Public thumbnail URL was not offloaded.'); }
+    if (!is_array($sizes) || !str_starts_with($sizes[0], $settings->publicUrl . '/')) { throw new RuntimeException('Public thumbnail URL was not offloaded.'); }
     if (!empty($config['next_origin'])) {
         $probe = add_query_arg(['url' => $url, 'w' => 640, 'q' => 75], rtrim($config['next_origin'], '/') . '/_next/image');
         $optimized = wp_remote_get($probe, ['timeout' => 30, 'redirection' => 0]);

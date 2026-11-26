@@ -21,43 +21,46 @@ final class MediaOffload
     }
     public function removeLocalFiles(bool $remove = true): self
     {
-        if (!$this->config) { throw new \LogicException('Configure storage first.'); }
-        $copy = clone $this;
-        $c = $this->config;
-        $copy->config = new Config($c->storage, $c->publicUrl, $c->prefix, $c->automatic, $remove, $c->privateStorage, $c->privateDirectory, $c->siteIds);
-        return $copy;
+        return $this->with(removeLocal: $remove);
     }
     public function automatic(bool $automatic = true): self
     {
-        if (!$this->config) { throw new \LogicException('Configure storage first.'); }
-        $copy = clone $this;
-        $c = $this->config;
-        $copy->config = new Config($c->storage, $c->publicUrl, $c->prefix, $automatic, $c->removeLocal, $c->privateStorage, $c->privateDirectory, $c->siteIds);
-        return $copy;
+        return $this->with(automatic: $automatic);
     }
     public function privateStorage(Storage $storage): self
     {
-        if (!$this->config) { throw new \LogicException('Configure storage first.'); }
-        $copy = clone $this;
-        $c = $this->config;
-        $copy->config = new Config($c->storage, $c->publicUrl, $c->prefix, $c->automatic, $c->removeLocal, $storage, $c->privateDirectory, $c->siteIds);
-        return $copy;
+        return $this->with(privateStorage: $storage);
     }
     public function privateDirectory(string $directory): self
     {
-        if (!$this->config) { throw new \LogicException('Configure storage first.'); }
-        $copy = clone $this;
-        $c = $this->config;
-        $copy->config = new Config($c->storage, $c->publicUrl, $c->prefix, $c->automatic, $c->removeLocal, $c->privateStorage, $directory, $c->siteIds);
-        return $copy;
+        return $this->with(privateDirectory: $directory);
     }
     /** Limit transfers and manifest access to the listed multisite IDs. */
     public function siteIds(array $siteIds): self
     {
+        return $this->with(siteIds: $siteIds);
+    }
+    public function publicSources(array $sources): self
+    {
+        return $this->with(publicSources: $sources);
+    }
+    public function verifyPublicDelivery(bool $verify = true): self
+    {
+        return $this->with(verifyPublicDelivery: $verify);
+    }
+    public function writes(bool $enabled): self
+    {
+        return $this->with(writeEnabled: $enabled);
+    }
+    public function preferLocalDelivery(bool $enabled = true): self
+    {
+        return $this->with(preferLocalDelivery: $enabled);
+    }
+    private function with(mixed ...$settings): self
+    {
         if (!$this->config) { throw new \LogicException('Configure storage first.'); }
         $copy = clone $this;
-        $c = $this->config;
-        $copy->config = new Config($c->storage, $c->publicUrl, $c->prefix, $c->automatic, $c->removeLocal, $c->privateStorage, $c->privateDirectory, $siteIds);
+        $copy->config = new Config(...array_replace(get_object_vars($this->config), $settings));
         return $copy;
     }
     public function register(): void
